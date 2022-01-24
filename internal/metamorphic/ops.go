@@ -99,19 +99,20 @@ func (o *closeOp) String() string {
 
 // compactOp models a DB.Compact operation.
 type compactOp struct {
-	start []byte
-	end   []byte
+	start    []byte
+	end      []byte
+	parallel bool
 }
 
 func (o *compactOp) run(t *test, h *history) {
 	err := withRetries(func() error {
-		return t.db.Compact(o.start, o.end)
+		return t.db.Compact(o.start, o.end, o.parallel)
 	})
 	h.Recordf("%s // %v", o, err)
 }
 
 func (o *compactOp) String() string {
-	return fmt.Sprintf("db.Compact(%q, %q)", o.start, o.end)
+	return fmt.Sprintf("db.Compact(%q, %q, %t /* parallel */)", o.start, o.end, o.parallel)
 }
 
 // deleteOp models a Write.Delete operation.
