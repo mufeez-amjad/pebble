@@ -35,7 +35,7 @@ type compactionPicker interface {
 	getEstimatedMaxWAmp() float64
 	estimatedCompactionDebt(l0ExtraSize uint64) uint64
 	pickAuto(env compactionEnv) (pc *pickedCompaction)
-	pickManual(env compactionEnv, manual *manualCompaction) (c *pickedCompaction, retryLater bool)
+	pickManual(env compactionEnv, manual *manualCompaction, cmp Compare) (c *pickedCompaction, retryLater bool)
 	pickElisionOnlyCompaction(env compactionEnv) (pc *pickedCompaction)
 	pickReadTriggeredCompaction(env compactionEnv) (pc *pickedCompaction)
 	forceBaseLevel1()
@@ -1339,7 +1339,7 @@ func pickIntraL0(env compactionEnv, opts *Options, vers *version) (pc *pickedCom
 }
 
 func (p *compactionPickerByScore) pickManual(
-	env compactionEnv, manual *manualCompaction,
+	env compactionEnv, manual *manualCompaction, cmp Compare,
 ) (pc *pickedCompaction, retryLater bool) {
 	if p == nil {
 		return nil, false
@@ -1356,6 +1356,9 @@ func (p *compactionPickerByScore) pickManual(
 		// ignore this manual compaction as there is nothing to do (manual.level
 		// points to an empty level).
 		return nil, false
+	}
+	if conflictsWithInProgress(manual, outputLevel, env.inProgressCompactions, cmp) {
+		return nil, true
 	}
 	pc = pickManualHelper(p.opts, manual, p.vers, p.baseLevel, p.diskAvailBytes)
 	if pc == nil {
@@ -1522,4 +1525,36 @@ func inputRangeAlreadyCompacting(env compactionEnv, pc *pickedCompaction) bool {
 		}
 	}
 	return false
+}
+
+func conflictsWithInProgress(
+	manual *manualCompaction, outputLevel int, inProgressCompactions []compactionInfo, cmp Compare,
+) bool {
+	for _, c := range inProgressCompactions {
+		if c.outputLevel == manual.level || c.outputLevel == outputLevel {
+			// manual's input level file range is currently being compacted to
+			if isOverlapping(manual.start, manual.end, c.smallest.UserKey, c.largest.UserKey, cmp) {
+				fmt.Printf("DEBUG: overlapping on outputLevel\n")
+				return true
+			}
+		}
+
+		for _, in := range c.inputs {
+			if in.files.Empty() {
+				continue
+			}
+			iter := in.files.Iter()
+			first := iter.First()
+			last := iter.Last()
+			if isOverlapping(manual.start, manual.end, first.Smallest.UserKey, last.Largest.UserKey, cmp) {
+				fmt.Printf("DEBUG: overlapping on L%d\n", in.level)
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isOverlapping(x1, x2, y1, y2 []byte, cmp Compare) bool {
+	return cmp(x1, y2) <= 0 && cmp(y1, x2) <= 0
 }

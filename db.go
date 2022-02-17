@@ -1260,18 +1260,82 @@ func (d *DB) Compact(start, end []byte, parallelize bool) error {
 		<-mem.flushed
 	}
 
-	for level := 0; level < maxLevelWithFiles; {
-		if err := d.manualCompact(iStart, iEnd, level, parallelize); err != nil {
-			return err
+	var wg sync.WaitGroup
+	d.mu.Lock()
+	iter := levelCompactionIter{i: 0, j: d.mu.versions.picker.getBaseLevel() + 1}
+	d.mu.Unlock()
+	wg.Add(2)
+
+	ch1 := make(chan error, 1)
+
+	go func() {
+		defer wg.Done()
+		for {
+			iter.Lock()
+			i := iter.i
+			if i == numLevels-1 || i >= maxLevelWithFiles {
+				// A manual compaction of the bottommost level occurred.
+				// There is no next level to try and compact.
+				iter.Unlock()
+				break
+			}
+			iter.Unlock()
+			if err := d.manualCompact(iStart, iEnd, i, parallelize); err != nil {
+				ch1 <- err
+				close(ch1)
+				return
+			}
+			iter.Lock()
+			iter.i++
+
+			iter.Unlock()
 		}
-		level++
-		if level == numLevels-1 {
-			// A manual compaction of the bottommost level occurred.
-			// There is no next level to try and compact.
-			break
+		close(ch1)
+	}()
+
+	ch2 := make(chan error, 1)
+	go func() {
+		defer wg.Done()
+		for {
+			iter.Lock()
+			j := iter.j
+			if j >= numLevels-1 || j >= maxLevelWithFiles {
+				iter.Unlock()
+				break
+			}
+			iter.Unlock()
+			if err := d.manualCompact(iStart, iEnd, j, parallelize); err != nil {
+				ch2 <- err
+				close(ch2)
+				return
+			}
+			iter.Lock()
+			iter.j++
+			iter.Unlock()
 		}
-	}
+		close(ch2)
+	}()
+
+	wg.Wait()
+
+	//for level := 0; level < maxLevelWithFiles; {
+	//	if err := d.manualCompact(iStart, iEnd, level, parallelize); err != nil {
+	//		return err
+	//	}
+	//	level++
+	//	if level == numLevels-1 {
+	//		// A manual compaction of the bottommost level occurred.
+	//		// There is no next level to try and compact.
+	//		break
+	//	}
+	//}
 	return nil
+}
+
+type levelCompactionIter struct {
+	sync.Mutex
+	i int
+	j int
 }
 
 func (d *DB) manualCompact(start, end InternalKey, level int, parallelize bool) error {

@@ -441,8 +441,8 @@ func runBuildCmd(td *datadriven.TestData, d *DB, fs vfs.FS) error {
 }
 
 func runCompactCmd(td *datadriven.TestData, d *DB) error {
-	if len(td.CmdArgs) > 3 {
-		return errors.Errorf("%s expects at most three arguments", td.Cmd)
+	if len(td.CmdArgs) > 4 {
+		return errors.Errorf("%s expects at most four arguments", td.Cmd)
 	}
 	parts := strings.Split(td.CmdArgs[0].Key, "-")
 	if len(parts) != 2 {

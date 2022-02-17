@@ -94,7 +94,7 @@ func (p *compactionPickerForTesting) pickElisionOnlyCompaction(
 }
 
 func (p *compactionPickerForTesting) pickManual(
-	env compactionEnv, manual *manualCompaction,
+	env compactionEnv, manual *manualCompaction, cmp Compare,
 ) (pc *pickedCompaction, retryLater bool) {
 	if p == nil {
 		return nil, false
@@ -1133,6 +1133,9 @@ func TestManualCompaction(t *testing.T) {
 	}
 
 	deleteOngoingCompaction := func(ongoingCompaction *compaction) {
+		if ongoingCompaction == nil {
+			return
+		}
 		for _, cl := range ongoingCompaction.inputs {
 			iter := cl.files.Iter()
 			for f := iter.First(); f != nil; f = iter.Next() {
@@ -1230,13 +1233,21 @@ func TestManualCompaction(t *testing.T) {
 					}
 					d.mu.Lock()
 					s = d.mu.versions.currentVersion().DebugString(base.DefaultFormatter)
+					if td.HasArg("hide-file-num") {
+						re := regexp.MustCompile(`([0-9]*):\[`)
+						s = re.ReplaceAllString(s, "[")
+					}
 					d.mu.Unlock()
 					close(ch)
 				}()
 
 				manualDone := func() bool {
 					select {
-					case <-ch:
+					case err := <-ch:
+						if err != nil {
+							deleteOngoingCompaction(ongoingCompaction)
+							t.Fatalf(err.Error())
+						}
 						return true
 					default:
 						return false
@@ -1262,7 +1273,6 @@ func TestManualCompaction(t *testing.T) {
 				if err != nil {
 					return err.Error()
 				}
-
 				if manualDone() {
 					return "manual compaction did not block for ongoing\n" + s
 				}
