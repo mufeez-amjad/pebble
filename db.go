@@ -1261,62 +1261,33 @@ func (d *DB) Compact(start, end []byte, parallelize bool) error {
 	}
 
 	var wg sync.WaitGroup
-	d.mu.Lock()
-	iter := levelCompactionIter{i: 0, j: d.mu.versions.picker.getBaseLevel() + 1}
-	d.mu.Unlock()
+	errs := make(chan error, 1)
+
+	compact := func(iter int) {
+		defer wg.Done()
+		for iter < maxLevelWithFiles && iter < numLevels-1 {
+			if err := d.manualCompact(iStart, iEnd, iter, parallelize); err != nil {
+				errs <- err
+				return
+			}
+			iter++
+		}
+	}
+
 	wg.Add(2)
-
-	ch1 := make(chan error, 1)
-
-	go func() {
-		defer wg.Done()
-		for {
-			iter.Lock()
-			i := iter.i
-			if i == numLevels-1 || i >= maxLevelWithFiles {
-				// A manual compaction of the bottommost level occurred.
-				// There is no next level to try and compact.
-				iter.Unlock()
-				break
-			}
-			iter.Unlock()
-			if err := d.manualCompact(iStart, iEnd, i, parallelize); err != nil {
-				ch1 <- err
-				close(ch1)
-				return
-			}
-			iter.Lock()
-			iter.i++
-
-			iter.Unlock()
-		}
-		close(ch1)
-	}()
-
-	ch2 := make(chan error, 1)
-	go func() {
-		defer wg.Done()
-		for {
-			iter.Lock()
-			j := iter.j
-			if j >= numLevels-1 || j >= maxLevelWithFiles {
-				iter.Unlock()
-				break
-			}
-			iter.Unlock()
-			if err := d.manualCompact(iStart, iEnd, j, parallelize); err != nil {
-				ch2 <- err
-				close(ch2)
-				return
-			}
-			iter.Lock()
-			iter.j++
-			iter.Unlock()
-		}
-		close(ch2)
-	}()
+	go compact(0)
+	d.mu.Lock()
+	baseLevel := d.mu.versions.picker.getBaseLevel()
+	d.mu.Unlock()
+	go compact(baseLevel + 1)
 
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			return err
+		}
+	}
 
 	//for level := 0; level < maxLevelWithFiles; {
 	//	if err := d.manualCompact(iStart, iEnd, level, parallelize); err != nil {
@@ -1330,12 +1301,6 @@ func (d *DB) Compact(start, end []byte, parallelize bool) error {
 	//	}
 	//}
 	return nil
-}
-
-type levelCompactionIter struct {
-	sync.Mutex
-	i int
-	j int
 }
 
 func (d *DB) manualCompact(start, end InternalKey, level int, parallelize bool) error {
