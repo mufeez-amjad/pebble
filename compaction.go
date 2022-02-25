@@ -1813,7 +1813,9 @@ func (d *DB) compact(c *compaction, errChannel chan error) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
 		v := d.mu.versions.currentVersion()
-		fmt.Printf("inUseKeyRanges b/w [%s, %s]: %d\n", c.smallest.UserKey, c.largest.UserKey, len(v.L0Sublevels.InUseKeyRanges(c.smallest.UserKey, c.largest.UserKey)))
+		start := []byte("a")
+		end := []byte("z")
+		fmt.Printf("inUseKeyRanges b/w [%s, %s]: %d\n", start, end, len(v.L0Sublevels.InUseKeyRanges(start, end)))
 		fmt.Printf("Number of L0 sublevels: %d\nNumber of ordered intervals: %d\n", len(v.L0Sublevels.Levels), len(v.L0Sublevels.OrderedIntervals))
 		if err := d.compact1(c, errChannel); err != nil {
 			// TODO(peter): count consecutive compaction errors and backoff.
