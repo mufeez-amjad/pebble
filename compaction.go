@@ -1817,6 +1817,10 @@ func (d *DB) compact(c *compaction, errChannel chan error) {
 		end := []byte("z")
 		fmt.Printf("inUseKeyRanges b/w [%s, %s]: %d\n", start, end, len(v.L0Sublevels.InUseKeyRanges(start, end)))
 		fmt.Printf("Number of L0 sublevels: %d\nNumber of ordered intervals: %d\n", len(v.L0Sublevels.Levels), len(v.L0Sublevels.OrderedIntervals))
+		for i, l := range v.L0Sublevels.Levels {
+			fmt.Printf("L0.%d has %d files\n", i, l.Len())
+		}
+		fmt.Printf("\n")
 		if err := d.compact1(c, errChannel); err != nil {
 			// TODO(peter): count consecutive compaction errors and backoff.
 			d.opts.EventListener.BackgroundError(err)
