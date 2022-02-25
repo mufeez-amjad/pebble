@@ -1819,8 +1819,14 @@ func (d *DB) compact(c *compaction, errChannel chan error) {
 		fmt.Printf("Number of L0 sublevels: %d\nNumber of ordered intervals: %d\n", len(v.L0Sublevels.Levels), len(v.L0Sublevels.OrderedIntervals))
 		for i, l := range v.L0Sublevels.Levels {
 			fmt.Printf("L0.%d has %d files\n", i, l.Len())
+			iter := l.Iter()
+
+			for f := iter.First(); f != nil; f = iter.Next() {
+				fmt.Printf("[%s, %s] ", f.Smallest.UserKey, f.Largest.UserKey)
+			}
+			fmt.Printf("\n")
 		}
-		fmt.Printf("\n")
+		fmt.Printf("\n\n")
 		if err := d.compact1(c, errChannel); err != nil {
 			// TODO(peter): count consecutive compaction errors and backoff.
 			d.opts.EventListener.BackgroundError(err)
