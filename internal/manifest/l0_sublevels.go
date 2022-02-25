@@ -229,7 +229,7 @@ type L0Sublevels struct {
 	levelMetadata *LevelMetadata
 
 	// The file intervals in increasing key order.
-	orderedIntervals []fileInterval
+	OrderedIntervals []fileInterval
 
 	// Keys to break flushes at.
 	flushSplitUserKeys [][]byte
@@ -286,10 +286,10 @@ func NewL0Sublevels(
 		})
 	}
 	keys = sortAndSweep(keys, cmp)
-	// All interval indices reference s.orderedIntervals.
-	s.orderedIntervals = make([]fileInterval, len(keys))
+	// All interval indices reference s.OrderedIntervals.
+	s.OrderedIntervals = make([]fileInterval, len(keys))
 	for i := range keys {
-		s.orderedIntervals[i] = fileInterval{
+		s.OrderedIntervals[i] = fileInterval{
 			index:                 i,
 			startKey:              keys[i].intervalKey,
 			filesMinIntervalIndex: i,
@@ -309,7 +309,7 @@ func NewL0Sublevels(
 		subLevel := 0
 		// Update state in every fileInterval for this file.
 		for i := f.minIntervalIndex; i <= f.maxIntervalIndex; i++ {
-			interval := &s.orderedIntervals[i]
+			interval := &s.OrderedIntervals[i]
 			if len(interval.files) > 0 &&
 				subLevel <= interval.files[len(interval.files)-1].subLevel {
 				subLevel = interval.files[len(interval.files)-1].subLevel + 1
@@ -350,15 +350,15 @@ func NewL0Sublevels(
 	// Multiply flushSplitMaxBytes by the number of sublevels. This prevents
 	// excessive flush splitting when the number of sublevels increases.
 	flushSplitMaxBytes *= int64(len(s.levelFiles))
-	for i := 0; i < len(s.orderedIntervals); i++ {
-		interval := &s.orderedIntervals[i]
+	for i := 0; i < len(s.OrderedIntervals); i++ {
+		interval := &s.OrderedIntervals[i]
 		if flushSplitMaxBytes > 0 && cumulativeBytes > uint64(flushSplitMaxBytes) &&
 			(len(s.flushSplitUserKeys) == 0 ||
 				!bytes.Equal(interval.startKey.key, s.flushSplitUserKeys[len(s.flushSplitUserKeys)-1])) {
 			s.flushSplitUserKeys = append(s.flushSplitUserKeys, interval.startKey.key)
 			cumulativeBytes = 0
 		}
-		cumulativeBytes += s.orderedIntervals[i].estimatedBytes
+		cumulativeBytes += s.OrderedIntervals[i].estimatedBytes
 	}
 	return s, nil
 }
@@ -375,10 +375,10 @@ type L0Compaction struct {
 //
 // Requires DB.mu to be held.
 func (s *L0Sublevels) InitCompactingFileInfo(inProgress []L0Compaction) {
-	for i := range s.orderedIntervals {
-		s.orderedIntervals[i].compactingFileCount = 0
-		s.orderedIntervals[i].isBaseCompacting = false
-		s.orderedIntervals[i].intervalRangeIsBaseCompacting = false
+	for i := range s.OrderedIntervals {
+		s.OrderedIntervals[i].compactingFileCount = 0
+		s.OrderedIntervals[i].isBaseCompacting = false
+		s.OrderedIntervals[i].intervalRangeIsBaseCompacting = false
 	}
 
 	iter := s.levelMetadata.Iter()
@@ -387,7 +387,7 @@ func (s *L0Sublevels) InitCompactingFileInfo(inProgress []L0Compaction) {
 			continue
 		}
 		for i := f.minIntervalIndex; i <= f.maxIntervalIndex; i++ {
-			interval := &s.orderedIntervals[i]
+			interval := &s.OrderedIntervals[i]
 			interval.compactingFileCount++
 			if !f.IsIntraL0Compacting {
 				// If f.Compacting && !f.IsIntraL0Compacting, this file is
@@ -405,14 +405,14 @@ func (s *L0Sublevels) InitCompactingFileInfo(inProgress []L0Compaction) {
 	for _, c := range inProgress {
 		startIK := intervalKey{key: c.Smallest.UserKey, isLargest: false}
 		endIK := intervalKey{key: c.Largest.UserKey, isLargest: !c.Largest.IsExclusiveSentinel()}
-		start := sort.Search(len(s.orderedIntervals), func(i int) bool {
-			return intervalKeyCompare(s.cmp, s.orderedIntervals[i].startKey, startIK) >= 0
+		start := sort.Search(len(s.OrderedIntervals), func(i int) bool {
+			return intervalKeyCompare(s.cmp, s.OrderedIntervals[i].startKey, startIK) >= 0
 		})
-		end := sort.Search(len(s.orderedIntervals), func(i int) bool {
-			return intervalKeyCompare(s.cmp, s.orderedIntervals[i].startKey, endIK) >= 0
+		end := sort.Search(len(s.OrderedIntervals), func(i int) bool {
+			return intervalKeyCompare(s.cmp, s.OrderedIntervals[i].startKey, endIK) >= 0
 		})
-		for i := start; i < end && i < len(s.orderedIntervals); i++ {
-			interval := &s.orderedIntervals[i]
+		for i := start; i < end && i < len(s.OrderedIntervals); i++ {
+			interval := &s.OrderedIntervals[i]
 			if !c.IsIntraL0 {
 				interval.isBaseCompacting = true
 			}
@@ -420,8 +420,8 @@ func (s *L0Sublevels) InitCompactingFileInfo(inProgress []L0Compaction) {
 	}
 
 	min := 0
-	for i := range s.orderedIntervals {
-		interval := &s.orderedIntervals[i]
+	for i := range s.OrderedIntervals {
+		interval := &s.OrderedIntervals[i]
 		if interval.isBaseCompacting {
 			minIndex := interval.filesMinIntervalIndex
 			if minIndex < min {
@@ -429,7 +429,7 @@ func (s *L0Sublevels) InitCompactingFileInfo(inProgress []L0Compaction) {
 			}
 			for j := minIndex; j <= interval.filesMaxIntervalIndex; j++ {
 				min = j
-				s.orderedIntervals[j].intervalRangeIsBaseCompacting = true
+				s.OrderedIntervals[j].intervalRangeIsBaseCompacting = true
 			}
 		}
 	}
@@ -444,7 +444,7 @@ func (s *L0Sublevels) String() string {
 func (s *L0Sublevels) describe(verbose bool) string {
 	var buf strings.Builder
 	fmt.Fprintf(&buf, "file count: %d, sublevels: %d, intervals: %d\nflush split keys(%d): [",
-		s.levelMetadata.Len(), len(s.levelFiles), len(s.orderedIntervals), len(s.flushSplitUserKeys))
+		s.levelMetadata.Len(), len(s.levelFiles), len(s.OrderedIntervals), len(s.flushSplitUserKeys))
 	for i := range s.flushSplitUserKeys {
 		fmt.Fprintf(&buf, "%s", s.formatKey(s.flushSplitUserKeys[i]))
 		if i < len(s.flushSplitUserKeys)-1 {
@@ -476,10 +476,10 @@ func (s *L0Sublevels) describe(verbose bool) string {
 			if verbose {
 				fmt.Fprintf(&buf, "\t%s\n", f)
 			}
-			if s.levelMetadata.Len() > 50 && intervals*3 > len(s.orderedIntervals) {
+			if s.levelMetadata.Len() > 50 && intervals*3 > len(s.OrderedIntervals) {
 				var intervalsBytes uint64
 				for k := f.minIntervalIndex; k <= f.maxIntervalIndex; k++ {
-					intervalsBytes += s.orderedIntervals[k].estimatedBytes
+					intervalsBytes += s.OrderedIntervals[k].estimatedBytes
 				}
 				fmt.Fprintf(&buf, "wide file: %d, [%d, %d], byte fraction: %f\n",
 					f.FileNum, f.minIntervalIndex, f.maxIntervalIndex,
@@ -492,8 +492,8 @@ func (s *L0Sublevels) describe(verbose bool) string {
 	fmt.Fprintf(&buf, "compacting file count: %d, base compacting intervals: ", numCompactingFiles)
 	i := 0
 	foundBaseCompactingIntervals := false
-	for ; i < len(s.orderedIntervals); i++ {
-		interval := &s.orderedIntervals[i]
+	for ; i < len(s.OrderedIntervals); i++ {
+		interval := &s.OrderedIntervals[i]
 		if len(interval.files) == 0 {
 			continue
 		}
@@ -530,8 +530,8 @@ func (s *L0Sublevels) describe(verbose bool) string {
 // sublevels.
 func (s *L0Sublevels) ReadAmplification() int {
 	amp := 0
-	for i := range s.orderedIntervals {
-		interval := &s.orderedIntervals[i]
+	for i := range s.OrderedIntervals {
+		interval := &s.OrderedIntervals[i]
 		fileCount := len(interval.files)
 		if amp < fileCount {
 			amp = fileCount
@@ -553,15 +553,15 @@ func (s *L0Sublevels) InUseKeyRanges(smallest, largest []byte) []UserKeyRange {
 	// Binary search to find the provided keys within the intervals.
 	startIK := intervalKey{key: smallest, isLargest: false}
 	endIK := intervalKey{key: largest, isLargest: true}
-	start := sort.Search(len(s.orderedIntervals), func(i int) bool {
-		return intervalKeyCompare(s.cmp, s.orderedIntervals[i].startKey, startIK) > 0
+	start := sort.Search(len(s.OrderedIntervals), func(i int) bool {
+		return intervalKeyCompare(s.cmp, s.OrderedIntervals[i].startKey, startIK) > 0
 	})
 	if start > 0 {
 		// Back up to the first interval with a start key <= startIK.
 		start--
 	}
-	end := sort.Search(len(s.orderedIntervals), func(i int) bool {
-		return intervalKeyCompare(s.cmp, s.orderedIntervals[i].startKey, endIK) > 0
+	end := sort.Search(len(s.OrderedIntervals), func(i int) bool {
+		return intervalKeyCompare(s.cmp, s.OrderedIntervals[i].startKey, endIK) > 0
 	})
 
 	var keyRanges []UserKeyRange
@@ -569,7 +569,7 @@ func (s *L0Sublevels) InUseKeyRanges(smallest, largest []byte) []UserKeyRange {
 	for i := start; i < end; {
 		// Intervals with no files are not in use and can be skipped, once we
 		// end the current UserKeyRange.
-		if len(s.orderedIntervals[i].files) == 0 {
+		if len(s.OrderedIntervals[i].files) == 0 {
 			curr = nil
 			i++
 			continue
@@ -578,7 +578,7 @@ func (s *L0Sublevels) InUseKeyRanges(smallest, largest []byte) []UserKeyRange {
 		// If curr is nil, start a new in-use key range.
 		if curr == nil {
 			keyRanges = append(keyRanges, UserKeyRange{
-				Start: s.orderedIntervals[i].startKey.key,
+				Start: s.OrderedIntervals[i].startKey.key,
 			})
 			curr = &keyRanges[len(keyRanges)-1]
 		}
@@ -586,13 +586,13 @@ func (s *L0Sublevels) InUseKeyRanges(smallest, largest []byte) []UserKeyRange {
 		// If the filesMaxIntervalIndex is not the current index, we can jump
 		// to the max index, knowing that all intermediary intervals are
 		// overlapped by some file.
-		if maxIdx := s.orderedIntervals[i].filesMaxIntervalIndex; maxIdx != i {
+		if maxIdx := s.OrderedIntervals[i].filesMaxIntervalIndex; maxIdx != i {
 			// Note that end may be less than or equal to maxIdx if we're
 			// concerned with a key range that ends before the interval at
 			// maxIdx starts. We must set curr.End now, before making that
 			// leap, because this iteration may be the last.
 			i = maxIdx
-			curr.End = s.orderedIntervals[i+1].startKey.key
+			curr.End = s.OrderedIntervals[i+1].startKey.key
 			continue
 		}
 
@@ -600,7 +600,7 @@ func (s *L0Sublevels) InUseKeyRanges(smallest, largest []byte) []UserKeyRange {
 		// interval. Update the current end to be the next interval's start
 		// key. Note that curr is not necessarily finished, because there may
 		// be an abutting non-empty interval.
-		curr.End = s.orderedIntervals[i+1].startKey.key
+		curr.End = s.OrderedIntervals[i+1].startKey.key
 		i++
 	}
 	return keyRanges
@@ -623,8 +623,8 @@ func (s *L0Sublevels) FlushSplitKeys() [][]byte {
 // L0 -> Lbase compaction.
 func (s *L0Sublevels) MaxDepthAfterOngoingCompactions() int {
 	depth := 0
-	for i := range s.orderedIntervals {
-		interval := &s.orderedIntervals[i]
+	for i := range s.OrderedIntervals {
+		interval := &s.OrderedIntervals[i]
 		intervalDepth := len(interval.files) - interval.compactingFileCount
 		if depth < intervalDepth {
 			depth = intervalDepth
@@ -742,7 +742,7 @@ func (s *L0Sublevels) UpdateStateForStartedCompaction(inputs []LevelSlice, isBas
 		iter := inputs[i].Iter()
 		for f := iter.First(); f != nil; f = iter.Next() {
 			for i := f.minIntervalIndex; i <= f.maxIntervalIndex; i++ {
-				interval := &s.orderedIntervals[i]
+				interval := &s.OrderedIntervals[i]
 				interval.compactingFileCount++
 			}
 			if f.minIntervalIndex < minIntervalIndex || minIntervalIndex == -1 {
@@ -755,10 +755,10 @@ func (s *L0Sublevels) UpdateStateForStartedCompaction(inputs []LevelSlice, isBas
 	}
 	if isBase {
 		for i := minIntervalIndex; i <= maxIntervalIndex; i++ {
-			interval := &s.orderedIntervals[i]
+			interval := &s.OrderedIntervals[i]
 			interval.isBaseCompacting = isBase
 			for j := interval.filesMinIntervalIndex; j <= interval.filesMaxIntervalIndex; j++ {
-				s.orderedIntervals[j].intervalRangeIsBaseCompacting = true
+				s.OrderedIntervals[j].intervalRangeIsBaseCompacting = true
 			}
 		}
 	}
@@ -1014,10 +1014,10 @@ func (s *L0Sublevels) PickBaseCompaction(
 	// construct a compaction for it and compare the constructed compactions
 	// and pick the best one. If microbenchmarks show that we can afford
 	// this cost we can eliminate this heuristic.
-	scoredIntervals := make([]intervalAndScore, 0, len(s.orderedIntervals))
+	scoredIntervals := make([]intervalAndScore, 0, len(s.OrderedIntervals))
 	sublevelCount := len(s.levelFiles)
-	for i := range s.orderedIntervals {
-		interval := &s.orderedIntervals[i]
+	for i := range s.OrderedIntervals {
+		interval := &s.OrderedIntervals[i]
 		depth := len(interval.files) - interval.compactingFileCount
 		if interval.isBaseCompacting || minCompactionDepth > depth {
 			continue
@@ -1035,9 +1035,9 @@ func (s *L0Sublevels) PickBaseCompaction(
 	// Optimization to avoid considering different intervals that
 	// are likely to choose the same seed file. Again this is just
 	// to reduce wasted work.
-	consideredIntervals := newBitSet(len(s.orderedIntervals))
+	consideredIntervals := newBitSet(len(s.OrderedIntervals))
 	for _, scoredInterval := range scoredIntervals {
-		interval := &s.orderedIntervals[scoredInterval.interval]
+		interval := &s.OrderedIntervals[scoredInterval.interval]
 		if consideredIntervals[interval.index] {
 			continue
 		}
@@ -1077,13 +1077,13 @@ func (s *L0Sublevels) PickBaseCompaction(
 			// An interval starting at ImmediateSuccessor(key) can never be the
 			// first interval of a compaction since no file can start at that
 			// interval.
-			m := baseIter.SeekGE(s.cmp, s.orderedIntervals[c.minIntervalIndex].startKey.key)
+			m := baseIter.SeekGE(s.cmp, s.OrderedIntervals[c.minIntervalIndex].startKey.key)
 
 			var baseCompacting bool
 			for ; m != nil && !baseCompacting; m = baseIter.Next() {
-				cmp := s.cmp(m.Smallest.UserKey, s.orderedIntervals[c.maxIntervalIndex+1].startKey.key)
+				cmp := s.cmp(m.Smallest.UserKey, s.OrderedIntervals[c.maxIntervalIndex+1].startKey.key)
 				// Compaction is ending at exclusive bound of c.maxIntervalIndex+1
-				if cmp > 0 || (cmp == 0 && !s.orderedIntervals[c.maxIntervalIndex+1].startKey.isLargest) {
+				if cmp > 0 || (cmp == 0 && !s.OrderedIntervals[c.maxIntervalIndex+1].startKey.isLargest) {
 					break
 				}
 				baseCompacting = baseCompacting || m.Compacting
@@ -1117,7 +1117,7 @@ func (s *L0Sublevels) baseCompactionUsingSeed(
 	// optional activity so when it fails we can fallback to the last
 	// successful candidate.
 	var lastCandidate *L0CompactionFiles
-	interval := &s.orderedIntervals[intervalIndex]
+	interval := &s.OrderedIntervals[intervalIndex]
 	for i := 0; i < len(interval.files); i++ {
 		f2 := interval.files[i]
 		sl := f2.subLevel
@@ -1230,9 +1230,9 @@ func (s *L0Sublevels) extendFiles(
 func (s *L0Sublevels) PickIntraL0Compaction(
 	earliestUnflushedSeqNum uint64, minCompactionDepth int,
 ) (*L0CompactionFiles, error) {
-	scoredIntervals := make([]intervalAndScore, len(s.orderedIntervals))
-	for i := range s.orderedIntervals {
-		interval := &s.orderedIntervals[i]
+	scoredIntervals := make([]intervalAndScore, len(s.OrderedIntervals))
+	for i := range s.OrderedIntervals {
+		interval := &s.OrderedIntervals[i]
 		depth := len(interval.files) - interval.compactingFileCount
 		if minCompactionDepth > depth {
 			continue
@@ -1244,9 +1244,9 @@ func (s *L0Sublevels) PickIntraL0Compaction(
 	// Optimization to avoid considering different intervals that
 	// are likely to choose the same seed file. Again this is just
 	// to reduce wasted work.
-	consideredIntervals := newBitSet(len(s.orderedIntervals))
+	consideredIntervals := newBitSet(len(s.OrderedIntervals))
 	for _, scoredInterval := range scoredIntervals {
-		interval := &s.orderedIntervals[scoredInterval.interval]
+		interval := &s.OrderedIntervals[scoredInterval.interval]
 		if consideredIntervals[interval.index] {
 			continue
 		}
@@ -1316,7 +1316,7 @@ func (s *L0Sublevels) intraL0CompactionUsingSeed(
 	c.addFile(f)
 
 	var lastCandidate *L0CompactionFiles
-	interval := &s.orderedIntervals[intervalIndex]
+	interval := &s.OrderedIntervals[intervalIndex]
 	slIndex := len(interval.files) - 1
 	for {
 		if interval.files[slIndex] == f {
@@ -1400,28 +1400,28 @@ func (s *L0Sublevels) ExtendL0ForBaseCompactionTo(
 	smallest, largest InternalKey, candidate *L0CompactionFiles,
 ) bool {
 	firstIntervalIndex := 0
-	lastIntervalIndex := len(s.orderedIntervals) - 1
+	lastIntervalIndex := len(s.OrderedIntervals) - 1
 	if smallest.Kind() != base.InternalKeyKindInvalid {
 		if smallest.Trailer == base.InternalKeyRangeDeleteSentinel {
 			// Starting at smallest.UserKey == interval.startKey is okay.
-			firstIntervalIndex = sort.Search(len(s.orderedIntervals), func(i int) bool {
-				return s.cmp(smallest.UserKey, s.orderedIntervals[i].startKey.key) <= 0
+			firstIntervalIndex = sort.Search(len(s.OrderedIntervals), func(i int) bool {
+				return s.cmp(smallest.UserKey, s.OrderedIntervals[i].startKey.key) <= 0
 			})
 		} else {
-			firstIntervalIndex = sort.Search(len(s.orderedIntervals), func(i int) bool {
+			firstIntervalIndex = sort.Search(len(s.OrderedIntervals), func(i int) bool {
 				// Need to start at >= smallest since if we widen too much we may miss
 				// an Lbase file that overlaps with an L0 file that will get picked in
 				// this widening, which would be bad. This interval will not start with
 				// an immediate successor key.
-				return s.cmp(smallest.UserKey, s.orderedIntervals[i].startKey.key) < 0
+				return s.cmp(smallest.UserKey, s.OrderedIntervals[i].startKey.key) < 0
 			})
 		}
 	}
 	if largest.Kind() != base.InternalKeyKindInvalid {
 		// First interval that starts at or beyond the largest. This interval will not
 		// start with an immediate successor key.
-		lastIntervalIndex = sort.Search(len(s.orderedIntervals), func(i int) bool {
-			return s.cmp(largest.UserKey, s.orderedIntervals[i].startKey.key) <= 0
+		lastIntervalIndex = sort.Search(len(s.OrderedIntervals), func(i int) bool {
+			return s.cmp(largest.UserKey, s.OrderedIntervals[i].startKey.key) <= 0
 		})
 		// Right now, lastIntervalIndex has a startKey that extends beyond largest.
 		// The previous interval, by definition, has an end key higher than largest.
@@ -1429,7 +1429,7 @@ func (s *L0Sublevels) ExtendL0ForBaseCompactionTo(
 		// (smallest, largest). Except in the case where we went past the end of the
 		// list; in that case, the last interval to include is the very last
 		// interval in the list.
-		if lastIntervalIndex < len(s.orderedIntervals) {
+		if lastIntervalIndex < len(s.OrderedIntervals) {
 			lastIntervalIndex--
 		}
 		lastIntervalIndex--

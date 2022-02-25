@@ -384,10 +384,10 @@ func TestL0Sublevels(t *testing.T) {
 					// the compactor is expected to implement.
 					baseFiles := fileMetas[baseLevel]
 					firstFile := sort.Search(len(baseFiles), func(i int) bool {
-						return sublevels.cmp(baseFiles[i].Largest.UserKey, sublevels.orderedIntervals[lcf.minIntervalIndex].startKey.key) >= 0
+						return sublevels.cmp(baseFiles[i].Largest.UserKey, sublevels.OrderedIntervals[lcf.minIntervalIndex].startKey.key) >= 0
 					})
 					lastFile := sort.Search(len(baseFiles), func(i int) bool {
-						return sublevels.cmp(baseFiles[i].Smallest.UserKey, sublevels.orderedIntervals[lcf.maxIntervalIndex+1].startKey.key) >= 0
+						return sublevels.cmp(baseFiles[i].Smallest.UserKey, sublevels.OrderedIntervals[lcf.maxIntervalIndex+1].startKey.key) >= 0
 					})
 					startKey := base.InvalidInternalKey
 					endKey := base.InvalidInternalKey
@@ -419,8 +419,8 @@ func TestL0Sublevels(t *testing.T) {
 					builder.WriteByte(',')
 				}
 			}
-			startKey := sublevels.orderedIntervals[lcf.seedInterval].startKey
-			endKey := sublevels.orderedIntervals[lcf.seedInterval+1].startKey
+			startKey := sublevels.OrderedIntervals[lcf.seedInterval].startKey
+			endKey := sublevels.OrderedIntervals[lcf.seedInterval+1].startKey
 			builder.WriteString(fmt.Sprintf("\nseed interval: %s-%s\n", startKey.key, endKey.key))
 			builder.WriteString(visualizeSublevels(sublevels, lcf.FilesIncluded, fileMetas[1:]))
 

@@ -1812,6 +1812,9 @@ func (d *DB) compact(c *compaction, errChannel chan error) {
 	pprof.Do(context.Background(), compactLabels, func(context.Context) {
 		d.mu.Lock()
 		defer d.mu.Unlock()
+		v := d.mu.versions.currentVersion()
+		fmt.Printf("inUseKeyRanges b/w [%s, %s]: %d\n", c.smallest.UserKey, c.largest.UserKey, len(v.L0Sublevels.InUseKeyRanges(c.smallest.UserKey, c.largest.UserKey)))
+		fmt.Printf("Number of L0 sublevels: %d\nNumber of ordered intervals: %d\n", len(v.L0Sublevels.Levels), len(v.L0Sublevels.OrderedIntervals))
 		if err := d.compact1(c, errChannel); err != nil {
 			// TODO(peter): count consecutive compaction errors and backoff.
 			d.opts.EventListener.BackgroundError(err)
