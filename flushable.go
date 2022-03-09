@@ -13,9 +13,13 @@ import (
 
 // flushable defines the interface for immutable memtables.
 type flushable interface {
+	// new iter with all point keys, check usages
 	newIter(o *IterOptions) internalIterator
+	// nil iter
 	newFlushIter(o *IterOptions, bytesFlushed *uint64) internalIterator
+	// return merge iter with range deletes for all ssts
 	newRangeDelIter(o *IterOptions) keyspan.FragmentIterator
+	// ignore for now
 	newRangeKeyIter(o *IterOptions) keyspan.FragmentIterator
 	// inuseBytes returns the number of inuse bytes by the flushable.
 	inuseBytes() uint64
@@ -79,3 +83,49 @@ func (e *flushableEntry) readerUnref() {
 }
 
 type flushableList []*flushableEntry
+
+type ingestedSSTable struct {
+	data []*fileMetadata
+	size uint64
+}
+
+func (s *ingestedSSTable) init(files []*fileMetadata) {
+	s.data = files
+	for _, file := range s.data {
+		s.size += file.Size
+	}
+}
+
+// look at LevelIter
+func (s *ingestedSSTable) newIter(o *IterOptions) internalIterator {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *ingestedSSTable) newFlushIter(o *IterOptions, bytesFlushed *uint64) internalIterator {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *ingestedSSTable) newRangeDelIter(o *IterOptions) keyspan.FragmentIterator {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *ingestedSSTable) newRangeKeyIter(o *IterOptions) keyspan.FragmentIterator {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (s *ingestedSSTable) inuseBytes() uint64 {
+	return s.size
+}
+
+// TODO: what happens if a lot of ingestions happen and totalBytes doesn't contribute to overall size of memtable queue
+func (s *ingestedSSTable) totalBytes() uint64 {
+	return s.size
+}
+
+func (s *ingestedSSTable) readyForFlush() bool {
+	return true
+}

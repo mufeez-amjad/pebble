@@ -645,6 +645,26 @@ func (d *DB) Ingest(paths []string) error {
 		for i := len(d.mu.mem.queue) - 1; i >= 0; i-- {
 			m := d.mu.mem.queue[i]
 			if ingestMemtableOverlaps(d.cmp, m, meta) {
+				// entry added to WAL
+				// 1. construct batch
+				// 2. d.commit.Commit()?
+
+				// ingested table is appended to list of memtables
+				//d.mu.mem.queue = append(d.mu.mem.queue, meta)
+				// sstable implements flushable
+				s := ingestedSSTable{meta}
+				entry := &flushableEntry{
+					flushable:            s,
+					flushed:              make(chan struct{}, 1),
+					flushForced:          false,
+					delayedFlushForced:   false,
+					logNum:               0,
+					logSize:              0,
+					logSeqNum:            0,
+					readerRefs:           0,
+					releaseMemAccounting: nil,
+				}
+				d.mu.mem.queue = append(d.mu.mem.queue, entry)
 				mem = m
 				if mem.flushable == d.mu.mem.mutable {
 					err = d.makeRoomForWrite(nil)

@@ -1278,6 +1278,8 @@ func (d *DB) passedFlushThreshold() bool {
 			// size. See minFlushSize below.
 			size += uint64(d.opts.MemTableSize)
 		} else {
+			// might be able to use levelIter
+			// each sst created increases readamp, 1 extra read in worst-case
 			size += d.mu.mem.queue[n].totalBytes()
 		}
 	}

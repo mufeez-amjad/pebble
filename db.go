@@ -1673,6 +1673,8 @@ func (d *DB) makeRoomForWrite(b *Batch) error {
 			for i := range d.mu.mem.queue {
 				size += d.mu.mem.queue[i].totalBytes()
 			}
+			// TODO(mufeez): Don't count totalBytes towards this size (because ssts are on disk already).
+			// Add all paths to a single flushableEntry
 			if size >= uint64(d.opts.MemTableStopWritesThreshold)*uint64(d.opts.MemTableSize) {
 				// We have filled up the current memtable, but already queued memtables
 				// are still flushing, so we wait.
@@ -1686,7 +1688,7 @@ func (d *DB) makeRoomForWrite(b *Batch) error {
 				continue
 			}
 		}
-		l0ReadAmp := d.mu.versions.currentVersion().L0Sublevels.ReadAmplification()
+		l0ReadAmp := d.mu.versions.currentVersion().L0Sublevels.ReadAmplification() // + sstable memtables
 		if l0ReadAmp >= d.opts.L0StopWritesThreshold {
 			// There are too many level-0 files, so we wait.
 			if !stalled {
