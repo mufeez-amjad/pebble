@@ -449,6 +449,10 @@ func TestIngestMemtableOverlaps(t *testing.T) {
 }
 
 func BenchmarkIngestOverlappingMemtable(b *testing.B) {
+	var d *DB
+	var err error
+	var mem *vfs.MemFS
+
 	assertNoError := func(err error) {
 		b.Helper()
 		if err != nil {
@@ -456,12 +460,17 @@ func BenchmarkIngestOverlappingMemtable(b *testing.B) {
 		}
 	}
 
-	for count := 1; count < 6; count++ {
+	for count := 1; count < 4; count++ {
 		b.Run(fmt.Sprintf("memtables=%d", count), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				mem := vfs.NewMem()
-				d, err := Open("", &Options{
+				if d != nil {
+					d.Close()
+					mem.RemoveAll(d.dirname)
+					d = nil
+				}
+				mem = vfs.NewMem()
+				d, err = Open("", &Options{
 					FS: mem,
 				})
 				assertNoError(err)
@@ -486,6 +495,60 @@ func BenchmarkIngestOverlappingMemtable(b *testing.B) {
 
 				b.StartTimer()
 				assertNoError(d.Ingest([]string{"ext"}))
+			}
+		})
+	}
+}
+
+func BenchmarkFlushOverlappingMemtable(b *testing.B) {
+	var d *DB
+	var err error
+	var mem *vfs.MemFS
+
+	assertNoError := func(err error) {
+		b.Helper()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	for count := 1; count < 4; count++ {
+		b.Run(fmt.Sprintf("ssts=%d", count), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				if d != nil {
+					d.Close()
+					mem.RemoveAll(d.dirname)
+					d = nil
+				}
+				mem = vfs.NewMem()
+				d, err = Open("", &Options{
+					FS: mem,
+				})
+				assertNoError(err)
+
+				// Create memtable
+				assertNoError(d.Set([]byte("0"), nil, nil))
+
+				// Create the overlapping sstable that will force a flush when ingested.
+				var ssts []string
+				for i := 0; i < count; i++ {
+					path := fmt.Sprintf("ext-%d", i)
+					ssts = append(ssts, path)
+					f, err := mem.Create(path)
+					assertNoError(err)
+					w := sstable.NewWriter(f, sstable.WriterOptions{})
+					assertNoError(w.Set([]byte(fmt.Sprintf("%d", i)), nil))
+					assertNoError(w.Close())
+				}
+
+				b.StartTimer()
+				assertNoError(d.Ingest(ssts))
+				d.mu.Lock()
+				for d.mu.compact.flushing {
+					d.mu.compact.cond.Wait()
+				}
+				d.mu.Unlock()
 			}
 		})
 	}
