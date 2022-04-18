@@ -448,6 +448,91 @@ func TestIngestMemtableOverlaps(t *testing.T) {
 	}
 }
 
+func TestFailingIngest(t *testing.T) {
+	var mem vfs.FS
+	var d *DB
+
+	mem = vfs.NewMem()
+	require.NoError(t, mem.MkdirAll("ext", 0755))
+	opts := &Options{
+		FS:                          mem,
+		MemTableStopWritesThreshold: 4,
+		L0CompactionThreshold:       100,
+		L0StopWritesThreshold:       100,
+		DebugCheck:                  DebugCheckLevels,
+		EventListener: EventListener{
+			CompactionBegin: func(info CompactionInfo) {
+				t.Log(info)
+			},
+			FlushBegin: func(info FlushInfo) {
+				t.Log(info)
+			},
+			TableDeleted: func(info TableDeleteInfo) {
+				t.Log(info)
+			},
+		},
+	}
+	// Disable automatic compactions because otherwise we'll race with
+	// delete-only compactions triggered by ingesting range tombstones.
+	opts.DisableAutomaticCompactions = true
+
+	// Ingest into L0, sst 1
+	// Compact and cause original sst 1 to be deleted
+	//
+
+	var err error
+	d, err = Open("", opts)
+	require.NoError(t, err)
+
+	createSST := func(i int, val []byte) string {
+		path := fmt.Sprintf("ext-%d", i)
+		f, err := mem.Create(path)
+		require.NoError(t, err)
+		w := sstable.NewWriter(f, sstable.WriterOptions{})
+		require.NoError(t, w.Set(val, nil))
+		require.NoError(t, w.Close())
+		return path
+	}
+	waitForFlush := func() {
+		d.mu.Lock()
+		for d.mu.compact.flushing {
+			d.mu.compact.cond.Wait()
+		}
+		d.mu.Unlock()
+	}
+	sst0 := createSST(0, []byte("a"))
+	// Ingest to L6
+	require.NoError(t, d.Ingest([]string{sst0}))
+
+	require.NoError(t, d.Set([]byte("a"), nil, nil))
+	sst1 := createSST(0, []byte("a"))
+	require.NoError(t, d.Ingest([]string{sst1}))
+	waitForFlush() // TODO: what happens if I remove this?
+
+	require.NoError(t, d.Set([]byte("a"), nil, nil))
+
+	sst2 := createSST(0, []byte("a"))
+	require.NoError(t, d.Ingest([]string{sst2}))
+	waitForFlush()
+
+	iter := d.NewIter(nil)
+	iter.SeekGE([]byte("a"))
+	iter.First()
+
+	iter.Next()
+
+	// 2 SSTs in L0, a compaction will delete them.
+	require.NoError(t, d.Compact([]byte("a"), []byte("b"), false))
+
+	iter.SeekLT([]byte("b"))
+	require.NoError(t, d.Set([]byte("a"), nil, nil))
+
+	iter.Next()
+
+	iter.Close()
+	require.NoError(t, d.Close())
+}
+
 func BenchmarkIngestOverlappingMemtable(b *testing.B) {
 	var d *DB
 	var err error
@@ -462,8 +547,9 @@ func BenchmarkIngestOverlappingMemtable(b *testing.B) {
 
 	for count := 1; count < 4; count++ {
 		b.Run(fmt.Sprintf("memtables=%d", count), func(b *testing.B) {
+			b.StopTimer()
+			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				b.StopTimer()
 				if d != nil {
 					d.Close()
 					mem.RemoveAll(d.dirname)
@@ -471,18 +557,35 @@ func BenchmarkIngestOverlappingMemtable(b *testing.B) {
 				}
 				mem = vfs.NewMem()
 				d, err = Open("", &Options{
-					FS: mem,
+					FS:                          mem,
+					MemTableStopWritesThreshold: 4,
+					L0StopWritesThreshold:       100,
+					MemTableSize:                64 << 20,
 				})
 				assertNoError(err)
 
+				// Prevent flushes.
+				d.mu.Lock()
+				d.mu.mem.nextSize = d.opts.MemTableSize
+				d.mu.compact.flushing = true
+				d.mu.Unlock()
+
 				// Create memtables.
-				for {
-					assertNoError(d.Set([]byte("a"), nil, nil))
+				for j := 1; j <= count+1; {
+					key := make([]byte, 20)
+					value := make([]byte, 100)
+					_, err := rand.Read(key)
+					assertNoError(err)
+					_, err = rand.Read(value)
+					assertNoError(err)
+
+					assertNoError(d.Set(key, value, nil))
+
 					d.mu.Lock()
-					done := len(d.mu.mem.queue) == count
+					memtables := len(d.mu.mem.queue)
 					d.mu.Unlock()
-					if done {
-						break
+					if j < memtables {
+						j = memtables
 					}
 				}
 
@@ -495,6 +598,7 @@ func BenchmarkIngestOverlappingMemtable(b *testing.B) {
 
 				b.StartTimer()
 				assertNoError(d.Ingest([]string{"ext"}))
+				b.StopTimer()
 			}
 		})
 	}
@@ -513,46 +617,130 @@ func BenchmarkFlushOverlappingMemtable(b *testing.B) {
 	}
 
 	for count := 1; count < 4; count++ {
-		b.Run(fmt.Sprintf("ssts=%d", count), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				b.StopTimer()
-				if d != nil {
-					d.Close()
-					mem.RemoveAll(d.dirname)
-					d = nil
-				}
-				mem = vfs.NewMem()
-				d, err = Open("", &Options{
-					FS: mem,
-				})
-				assertNoError(err)
-
-				// Create memtable
-				assertNoError(d.Set([]byte("0"), nil, nil))
-
-				// Create the overlapping sstable that will force a flush when ingested.
-				var ssts []string
-				for i := 0; i < count; i++ {
-					path := fmt.Sprintf("ext-%d", i)
-					ssts = append(ssts, path)
-					f, err := mem.Create(path)
+		for _, overlapping := range []bool{false, true} {
+			b.Run(fmt.Sprintf("ssts=%d,overlapping=%v", count, overlapping), func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					b.StopTimer()
+					if d != nil {
+						d.Close()
+						mem.RemoveAll(d.dirname)
+						d = nil
+					}
+					mem = vfs.NewMem()
+					d, err = Open("", &Options{
+						FS:                          mem,
+						MemTableStopWritesThreshold: 4,
+						L0StopWritesThreshold:       1000,
+						EventListener: EventListener{
+							FlushBegin: func(info FlushInfo) {
+								b.StartTimer()
+							}, FlushEnd: func(info FlushInfo) {
+								b.StopTimer()
+							},
+						},
+					})
 					assertNoError(err)
-					w := sstable.NewWriter(f, sstable.WriterOptions{})
-					assertNoError(w.Set([]byte(fmt.Sprintf("%d", i)), nil))
-					assertNoError(w.Close())
-				}
 
-				b.StartTimer()
-				assertNoError(d.Ingest(ssts))
-				d.mu.Lock()
-				for d.mu.compact.flushing {
-					d.mu.compact.cond.Wait()
+					// Create memtable
+					if overlapping {
+						assertNoError(d.Set([]byte("1"), nil, nil))
+					} else {
+						assertNoError(d.Set([]byte("0"), nil, nil))
+					}
+
+					// Create the overlapping sstables that will force a flush when ingested.
+					var ssts []string
+					for j := 0; j < count; j++ {
+						path := fmt.Sprintf("ext-%d", j)
+						ssts = append(ssts, path)
+						f, err := mem.Create(path)
+						assertNoError(err)
+						w := sstable.NewWriter(f, sstable.WriterOptions{})
+						assertNoError(w.Set([]byte(fmt.Sprintf("%d", j+1)), nil))
+						assertNoError(w.Close())
+					}
+
+					assertNoError(d.Ingest(ssts))
+
+					d.mu.Lock()
+					for d.mu.compact.flushing {
+						d.mu.compact.cond.Wait()
+					}
+					d.mu.Unlock()
 				}
-				d.mu.Unlock()
-			}
-		})
+			})
+		}
 	}
 }
+
+//func BenchmarkFlushOverlappingMemtable(b *testing.B) {
+//	var d *DB
+//	var err error
+//	var mem *vfs.MemFS
+//
+//	assertNoError := func(err error) {
+//		b.Helper()
+//		if err != nil {
+//			b.Fatal(err)
+//		}
+//	}
+//
+//	for count := 1; count < 4; count++ {
+//		for overlap := 0; overlap <= count; overlap++ {
+//			b.Run(fmt.Sprintf("ssts=%d, overlapping=%v", count, overlap), func(b *testing.B) {
+//				for i := 0; i < b.N; i++ {
+//					b.StopTimer()
+//					if d != nil {
+//						d.Close()
+//						mem.RemoveAll(d.dirname)
+//						d = nil
+//					}
+//					mem = vfs.NewMem()
+//					d, err = Open("", &Options{
+//						FS:                          mem,
+//						MemTableStopWritesThreshold: 4,
+//						L0StopWritesThreshold:       1000,
+//						EventListener: EventListener{
+//							FlushBegin: func(info FlushInfo) {
+//								b.StartTimer()
+//							}, FlushEnd: func(info FlushInfo) {
+//								b.StopTimer()
+//							},
+//						},
+//					})
+//					assertNoError(err)
+//
+//					// Create memtable
+//					assertNoError(d.Set([]byte("0"), nil, nil))
+//					for j := 0; j < overlap; j++ {
+//						assertNoError(d.Set([]byte(fmt.Sprintf("%d", j+1)), nil, nil))
+//					}
+//
+//					// Create the overlapping sstables that will force a flush when ingested.
+//					var ssts []string
+//					for j := 0; j < count; j++ {
+//						path := fmt.Sprintf("ext-%d", j)
+//						ssts = append(ssts, path)
+//						f, err := mem.Create(path)
+//						assertNoError(err)
+//						w := sstable.NewWriter(f, sstable.WriterOptions{})
+//
+//						assertNoError(w.Set([]byte(fmt.Sprintf("%d", j+1)), nil))
+//						assertNoError(w.Close())
+//					}
+//
+//					assertNoError(d.Ingest(ssts))
+//
+//					d.mu.Lock()
+//					for d.mu.compact.flushing {
+//						d.mu.compact.cond.Wait()
+//					}
+//					d.mu.Unlock()
+//				}
+//			})
+//		}
+//	}
+//}
 
 func TestIngestTargetLevel(t *testing.T) {
 	var d *DB
